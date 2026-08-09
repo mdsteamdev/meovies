@@ -95,8 +95,13 @@ async function runCrawler() {
 
     console.log(`🔎 [Đang chiếu ${diffDays} ngày] Cào phim: [${m.title}] -> ${movieUrl}`);
 
-    try {
+   try {
+      // Mở trang phim
       await page.goto(movieUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+
+      // In thử Title trang xem có bị dính Cloudflare không
+      const pageTitle = await page.title();
+      console.log(`📄 Page Title: "${pageTitle}"`);
 
       const revenueText = await page.evaluate(() => {
         const bodyText = document.body.innerText || '';
@@ -116,7 +121,7 @@ async function runCrawler() {
         }
         console.log(`✅ CẬP NHẬT THÀNH CÔNG: [${m.title}] = ${revenueNum.toLocaleString('vi-VN')} VNĐ`);
       } else {
-        console.log(`⚠️ Không tìm thấy ô doanh thu: ${m.title}`);
+        console.log(`⚠️ Không tìm thấy ô doanh thu trên DOM: ${m.title}`);
       }
 
       await new Promise(r => setTimeout(r, 1500));
@@ -124,8 +129,6 @@ async function runCrawler() {
     } catch (err) {
       console.log(`❌ Lỗi phim ${m.title}: ${err.message}`);
     }
-  }
-
   await browser.close();
   console.log('🎉 Hoàn tất tiến trình!');
 }
