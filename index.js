@@ -48,15 +48,13 @@ async function getMoviesFromCSV() {
 
     const headers = rows[0].map(h => String(h).trim().toUpperCase());
     let idxTitle = headers.indexOf("TÊN PHIM") !== -1 ? headers.indexOf("TÊN PHIM") : 0;
-    let idxDate = headers.indexOf("RELEASE_DATE") !== -1 ? headers.indexOf("RELEASE_DATE") : 6;
 
     const movies = [];
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
       if (row.length > idxTitle) {
         const title = String(row[idxTitle] || '').trim();
-        const releaseDate = row.length > idxDate ? String(row[idxDate] || '').trim() : '';
-        if (title) movies.push({ title, releaseDate });
+        if (title) movies.push({ title });
       }
     }
     return movies;
@@ -67,13 +65,13 @@ async function getMoviesFromCSV() {
 }
 
 async function runCrawler() {
-  console.log('🚀 Bắt đầu chạy Bot GitHub Actions bóc tách Doanh Thu...');
+  console.log('🚀 Bắt đầu chạy Bot GitHub Actions...');
 
   const movies = await getMoviesFromCSV();
-  console.log(`📊 Tải thành công ${movies.length} phim từ Google Sheets CSV.`);
+  console.log(`📊 Đã đọc được ${movies.length} phim từ Google Sheet CSV.`);
 
   if (movies.length === 0) {
-    console.log('⚠️ Không có dữ liệu phim nào.');
+    console.log('⚠️ Không lấy được tên phim nào từ file CSV.');
     return;
   }
 
@@ -85,56 +83,60 @@ async function runCrawler() {
   const page = await browser.newPage();
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-  const TODAY = new Date();
-
   for (const m of movies) {
-    const releaseDate = m.releaseDate ? new Date(m.releaseDate) : new Date(0);
-    const diffDays = Math.ceil((TODAY - releaseDate) / (1000 * 60 * 60 * 24));
-
-    if (diffDays < 0 || diffDays > 30) continue;
-
     const slug = convertToBOVNSlug(m.title);
     const movieUrl = `https://v1.boxofficevietnam.com/movie/${slug}/`;
 
-    console.log(`🔎 [Đang chiếu ${diffDays} ngày] Cào phim: [${m.title}] -> ${movieUrl}`);
+    console.log(`🔎 [Xử lý] Phim: [${m.title}] -> URL: ${movieUrl}`);
 
     try {
       await page.goto(movieUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
-      // In Tiêu đề trang để kiểm tra xem có bị dính Cloudflare anti-bot hay không
       const pageTitle = await page.title();
-      console.log(`📄 Page Title: "${pageTitle}"`);
+      console.log(`📄 Title trang: "${pageTitle}"`);
 
+      // Quét chuỗi số doanh thu đa định dạng từ Rendered DOM
       const revenueText = await page.evaluate(() => {
         const bodyText = document.body.innerText || '';
-        const match = bodyText.match(/Doanh\s*thu[^0-9]*([\d\.]+)\s*(?:₫|VND|VNĐ)/i);
-        return match ? match[1] : null;
+        // Pattern 1: Doanh thu: 123.456.789 ₫
+        let match = bodyText.match(/Doanh\s*thu[^0-9]*([\d\.]+)\s*(?:₫|VND|VNĐ)/i);
+        if (match) return match[1];
+
+        // Pattern 2: Tìm chuỗi số định dạng XXX.XXX.XXX đ
+        match = bodyText.match(/([\d\.]{6,15})\s*(?:₫|VND|VNĐ)/i);
+        if (match) return match[1];
+
+        return null;
       });
 
       if (revenueText) {
         const revenueNum = parseInt(revenueText.replace(/\./g, ''), 10);
-        
+        console.log(`💰 Tìm thấy Doanh thu: ${revenueNum.toLocaleString('vi-VN')} VNĐ`);
+
         if (GAS_WEBHOOK_URL) {
-          await fetch(GAS_WEBHOOK_URL, {
+          const res = await fetch(GAS_WEBHOOK_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: m.title, revenue: revenueNum })
           });
+          const resText = await res.text();
+          console.log(`📡 Phản hồi từ Google Sheet Webhook: ${resText}`);
+        } else {
+          console.log(`⚠️ Chưa cấu hình GAS_WEBHOOK_URL trong Secrets.`);
         }
-        console.log(`✅ CẬP NHẬT THÀNH CÔNG: [${m.title}] = ${revenueNum.toLocaleString('vi-VN')} VNĐ`);
       } else {
-        console.log(`⚠️ Không tìm thấy ô doanh thu: ${m.title}`);
+        console.log(`⚠️ Không tìm thấy ô số doanh thu cho phim: ${m.title}`);
       }
 
       await new Promise(r => setTimeout(r, 1500));
 
     } catch (err) {
-      console.log(`❌ Lỗi phim ${m.title}: ${err.message}`);
+      console.log(`❌ Lỗi khi tải phim ${m.title}: ${err.message}`);
     }
   }
 
   await browser.close();
-  console.log('🎉 Hoàn tất tiến trình!');
+  console.log('🎉 Hoàn tất toàn bộ tiến trình!');
 }
 
 runCrawler();
