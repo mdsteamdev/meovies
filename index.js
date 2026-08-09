@@ -72,7 +72,10 @@ async function runCrawler() {
   const movies = await getMoviesFromCSV();
   console.log(`📊 Tải thành công ${movies.length} phim từ Google Sheets CSV.`);
 
-  if (movies.length === 0) return;
+  if (movies.length === 0) {
+    console.log('⚠️ Không có dữ liệu phim nào.');
+    return;
+  }
 
   const browser = await puppeteer.launch({
     headless: 'new',
@@ -80,7 +83,7 @@ async function runCrawler() {
   });
 
   const page = await browser.newPage();
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
   const TODAY = new Date();
 
@@ -95,11 +98,10 @@ async function runCrawler() {
 
     console.log(`🔎 [Đang chiếu ${diffDays} ngày] Cào phim: [${m.title}] -> ${movieUrl}`);
 
-   try {
-      // Mở trang phim
+    try {
       await page.goto(movieUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
-      // In thử Title trang xem có bị dính Cloudflare không
+      // In Tiêu đề trang để kiểm tra xem có bị dính Cloudflare anti-bot hay không
       const pageTitle = await page.title();
       console.log(`📄 Page Title: "${pageTitle}"`);
 
@@ -121,7 +123,7 @@ async function runCrawler() {
         }
         console.log(`✅ CẬP NHẬT THÀNH CÔNG: [${m.title}] = ${revenueNum.toLocaleString('vi-VN')} VNĐ`);
       } else {
-        console.log(`⚠️ Không tìm thấy ô doanh thu trên DOM: ${m.title}`);
+        console.log(`⚠️ Không tìm thấy ô doanh thu: ${m.title}`);
       }
 
       await new Promise(r => setTimeout(r, 1500));
@@ -129,6 +131,8 @@ async function runCrawler() {
     } catch (err) {
       console.log(`❌ Lỗi phim ${m.title}: ${err.message}`);
     }
+  }
+
   await browser.close();
   console.log('🎉 Hoàn tất tiến trình!');
 }
