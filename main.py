@@ -3,7 +3,7 @@ import requests
 from playwright.sync_api import sync_playwright
 
 # DÁN LINK WEB APP CỦA BẠN VÀO ĐÂY
-WEB_APP_URL = "DAN_LINK_WEB_APP_EXEC_O_BUOC_1_VAO_DAY"
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycby2csvwi9GJJ5L3fCNa9O4DqZxG50R-jk8o5c6uV7ltmZpM10Hbdd4paG3G4PoiQm39/exec"
 
 def run():
     # 1. Lấy danh sách showtimeId từ Google Sheets qua Web App
