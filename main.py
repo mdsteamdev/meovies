@@ -3,6 +3,7 @@ import json
 import requests
 from playwright.sync_api import sync_playwright
 
+TARGET_URL = "https://v1.boxofficevietnam.com".replace("[", "").replace("]", "").split("(")[0].strip()
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycby2csvwi9GJJ5L3fCNa9O4DqZxG50R-jk8o5c6uV7ltmZpM10Hbdd4paG3G4PoiQm39/exec"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
@@ -70,7 +71,8 @@ def run():
 
         print("\n🌐 Đang mở [https://v1.boxofficevietnam.com](https://v1.boxofficevietnam.com)...")
         try:
-            page.goto("[https://v1.boxofficevietnam.com](https://v1.boxofficevietnam.com)", wait_until="domcontentloaded", timeout=40000)
+            # SỬA LẠI THÀNH CHUỖI SẠCH TUYỆT ĐỐI (KHÔNG CÓ NGOẶC [ ] HAY ( )):
+page.goto("https://v1.boxofficevietnam.com", wait_until="domcontentloaded", timeout=40000)
             page.wait_for_selector("table tbody tr", timeout=10000)
 
             # Bốc trực tiếp từ các hàng <tr> trong <table>
