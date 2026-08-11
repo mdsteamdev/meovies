@@ -8,32 +8,31 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
 def match_movies_with_gemini(bovn_movies, sheet_movies):
     if not GEMINI_API_KEY:
-        print("⚠️ Không tìm thấy GEMINI_API_KEY trong environment variable.")
+        print("⚠️ Không tìm thấy GEMINI_API_KEY. Bỏ qua bước đối soát AI.")
         return []
 
     prompt = f"""
 Bạn là chuyên gia đối soát dữ liệu điện ảnh.
-Dưới đây là 2 danh sách phim:
+Khớp danh sách A (từ Box Office VN) với danh sách B (từ Database của tôi).
 
-DANH SÁCH A (Trích xuất từ Box Office Vietnam):
+DANH SÁCH A:
 {json.dumps(bovn_movies, ensure_ascii=False)}
 
-DANH SÁCH B (Cơ sở dữ liệu của tôi):
+DANH SÁCH B:
 {json.dumps(sheet_movies, ensure_ascii=False)}
 
-Nhiệm vụ: Dựa vào Tên tiếng Việt, Tên tiếng Anh, hoặc ngữ cảnh (dễ thấy 'Spider Man' = 'Người Nhện'), hãy khớp các phim ở DANH SÁCH A với DANH SÁCH B.
-
-Trả về duy nhất 1 mảng JSON chuẩn (không chứa markdown ```json):
+Yêu cầu:
+1. So sánh Tên tiếng Việt / Tên tiếng Anh / Ngữ cảnh (ví dụ: 'Spider Man 4' = 'Người Nhện: Khởi Đầu Mới', 'Conan Movie 29' = 'Thám Tử Lừng Danh Conan...').
+2. Trả về mảng JSON chuẩn (KHÔNG DÙNG MARKDOWN ```json):
 [
   {{
-    "matched_sheet_title": "Tên exact trong danh sách B",
-    "revenueVN": 12345678,
-    "revenueTodayVN": 123456
+    "matched_sheet_title": "Tên chính xác trong Danh sách B",
+    "revenueTodayVN": 12345678
   }}
 ]
     """
     
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){GEMINI_API_KEY}"
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=){GEMINI_API_KEY}"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"response_mime_type": "application/json"}
@@ -44,98 +43,87 @@ Trả về duy nhất 1 mảng JSON chuẩn (không chứa markdown ```json):
         if res.status_code == 200:
             result_text = res.json()['candidates'][0]['content']['parts'][0]['text']
             return json.loads(result_text)
-        else:
-            print(f"❌ Lỗi gọi Gemini AI ({res.status_code}): {res.text}")
     except Exception as e:
-        print(f"❌ Lỗi Exception Gemini AI: {e}")
+        print(f"❌ Lỗi Gemini AI: {e}")
     
     return []
 
 def run():
-    # 1. Lấy danh sách phim trên Google Sheets
+    # 1. Lấy DB từ Google Sheets
     try:
-        get_url = f"{WEB_APP_URL.strip()}?action=get_movie_titles"
-        res = requests.get(get_url)
+        res = requests.get(f"{WEB_APP_URL}?action=get_movie_titles")
         sheet_movies = res.json().get("movies", [])
         print(f"📋 Danh sách DB ({len(sheet_movies)} phim): {[m.get('title') for m in sheet_movies]}")
     except Exception as e:
         print(f"❌ Lỗi lấy DB: {e}")
         return
 
-    # 2. Playwright mở TRANG CHỦ BOVN
+    # 2. Quét bảng Doanh thu trên v1.boxofficevietnam.com
     bovn_scraped_data = []
-    target_url = "[https://boxofficevietnam.com](https://boxofficevietnam.com)".strip()
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            viewport={'width': 1366, 'height': 768}
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
         page = context.new_page()
 
-        print(f"\n🌐 Đang mở Trang Chủ Box Office Vietnam: {target_url}")
+        print("\n🌐 Đang mở [https://v1.boxofficevietnam.com](https://v1.boxofficevietnam.com)...")
         try:
-            page.goto(target_url, wait_until="domcontentloaded", timeout=40000)
-            page.wait_for_timeout(4000)
+            page.goto("[https://v1.boxofficevietnam.com](https://v1.boxofficevietnam.com)", wait_until="domcontentloaded", timeout=40000)
+            page.wait_for_selector("table tbody tr", timeout=10000)
 
+            # Bốc trực tiếp từ các hàng <tr> trong <table>
             bovn_scraped_data = page.evaluate("""
                 () => {
-                    const list = [];
-                    const rows = document.querySelectorAll('table tbody tr, .movie-card, .revenue-item, [class*="movie"]');
-                    
-                    rows.forEach(row => {
-                        const txt = row.innerText || "";
-                        const lines = txt.split('\\n').map(l => l.trim()).filter(l => l.length > 0);
-                        
-                        if (lines.length >= 2) {
-                            const nums = txt.match(/([0-9\\.,]+)\\s*₫/g) || [];
-                            const parsedNums = nums.map(n => parseInt(n.replace(/[^0-9]/g, ''), 10) || 0);
-
-                            if (parsedNums.length > 0) {
-                                list.push({
-                                    raw_text: lines[0],
-                                    revenue_total: Math.max(...parsedNums),
-                                    revenue_today: parsedNums.length > 1 ? Math.min(...parsedNums) : 0
-                                });
-                            }
+                    const rows = Array.from(document.querySelectorAll('table tbody tr'));
+                    return rows.map(row => {
+                        const cols = row.querySelectorAll('td');
+                        const aTag = row.querySelector('a');
+                        if (cols.length >= 2) {
+                            const title = aTag ? aTag.innerText.trim() : cols[0].innerText.trim();
+                            const revenueStr = cols[1] ? cols[1].innerText.replace(/[^0-9]/g, '') : "0";
+                            return {
+                                title: title,
+                                revenueToday: parseInt(revenueStr, 10) || 0
+                            };
                         }
-                    });
-                    return list;
+                        return null;
+                    }).filter(Boolean);
                 }
             """)
 
-            print(f"🎉 Cào thành công {len(bovn_scraped_data)} phim từ Trang chủ BOVN!")
+            print(f"🎉 Cào thành công {len(bovn_scraped_data)} phim từ Bảng Trang chủ BOVN!")
+            for item in bovn_scraped_data:
+                print(f"  - {item['title']}: {item['revenueToday']:,} VNĐ")
 
         except Exception as e:
-            print(f"❌ Lỗi cào trang chủ BOVN: {e}")
+            print(f"❌ Lỗi cào bảng BOVN: {e}")
         finally:
             page.close()
             browser.close()
 
     if not bovn_scraped_data:
-        print("⚠️ Không lấy được dữ liệu từ Trang chủ BOVN.")
+        print("⚠️ Không lấy được bảng dữ liệu.")
         return
 
-    # 3. Gửi Gemini AI đối soát mờ
+    # 3. Cho Gemini AI đối soát tên phim
     print("\n🤖 Đang nhờ Gemini AI đối soát tên phim...")
     matched_results = match_movies_with_gemini(bovn_scraped_data, sheet_movies)
-    print(f"🎯 AI đã ghép nối thành công {len(matched_results)} phim!")
+    print(f"🎯 Ghép nối thành công {len(matched_results)} phim!")
 
-    # 4. Gửi kết quả về Google Sheets
+    # 4. Gửi Doanh thu trong ngày về Google Sheets
     for item in matched_results:
         title = item.get("matched_sheet_title")
-        rev_total = item.get("revenueVN", 0)
         rev_today = item.get("revenueTodayVN", 0)
 
-        if title and rev_total > 0:
+        if title and rev_today > 0:
             payload = {
                 "title": title,
-                "revenueVN": rev_total,
                 "revenueTodayVN": rev_today
             }
-            post_res = requests.post(WEB_APP_URL.strip(), data=json.dumps(payload))
-            print(f"  💾 Cập nhật '{title}': {rev_total:,} VNĐ -> {post_res.text}")
+            post_res = requests.post(WEB_APP_URL, data=json.dumps(payload))
+            print(f"  💾 Cập nhật '{title}': {rev_today:,} VNĐ -> {post_res.text}")
 
 if __name__ == "__main__":
     run()
