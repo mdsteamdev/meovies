@@ -1,0 +1,30 @@
+name: Moveek Seat Scraper
+
+on:
+  schedule:
+    # Chạy tự động mỗi 2 tiếng 1 lần
+    - cron: '0 */2 * * *'
+  workflow_dispatch: # Cho phép bấm chạy thủ công bằng tay bất cứ lúc nào
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests playwright
+          playwright install chromium
+          playwright install-deps
+
+      - name: Run Scraper
+        run: python main.py
