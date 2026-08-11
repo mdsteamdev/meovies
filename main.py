@@ -1,13 +1,10 @@
 import os
 import json
 import requests
-import re
 from playwright.sync_api import sync_playwright
 
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycby2csvwi9GJJ5L3fCNa9O4DqZxG50R-jk8o5c6uV7ltmZpM10Hbdd4paG3G4PoiQm39/exec"
-
-# LẤY GEMINI API KEY AN TOÀN TỪ ENVIRONMENT VARIABLE
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
 def match_movies_with_gemini(bovn_movies, sheet_movies):
     if not GEMINI_API_KEY:
@@ -57,15 +54,17 @@ Trả về duy nhất 1 mảng JSON chuẩn (không chứa markdown ```json):
 def run():
     # 1. Lấy danh sách phim trên Google Sheets
     try:
-        res = requests.get(f"{WEB_APP_URL}?action=get_movie_titles")
+        get_url = f"{WEB_APP_URL.strip()}?action=get_movie_titles"
+        res = requests.get(get_url)
         sheet_movies = res.json().get("movies", [])
         print(f"📋 Danh sách DB ({len(sheet_movies)} phim): {[m.get('title') for m in sheet_movies]}")
     except Exception as e:
         print(f"❌ Lỗi lấy DB: {e}")
         return
 
-    # 2. Playwright mở TRANG CHỦ BOVN bốc toàn bộ bảng Doanh thu
+    # 2. Playwright mở TRANG CHỦ BOVN
     bovn_scraped_data = []
+    target_url = "[https://boxofficevietnam.com](https://boxofficevietnam.com)".strip()
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -75,9 +74,9 @@ def run():
         )
         page = context.new_page()
 
-        print("\n🌐 Đang mở Trang Chủ Box Office Vietnam...")
+        print(f"\n🌐 Đang mở Trang Chủ Box Office Vietnam: {target_url}")
         try:
-            page.goto("[https://boxofficevietnam.com/](https://boxofficevietnam.com/)", wait_until="domcontentloaded", timeout=40000)
+            page.goto(target_url, wait_until="domcontentloaded", timeout=40000)
             page.wait_for_timeout(4000)
 
             bovn_scraped_data = page.evaluate("""
@@ -123,7 +122,7 @@ def run():
     matched_results = match_movies_with_gemini(bovn_scraped_data, sheet_movies)
     print(f"🎯 AI đã ghép nối thành công {len(matched_results)} phim!")
 
-    # 4. Gửi kết quả chính xác về Google Sheets
+    # 4. Gửi kết quả về Google Sheets
     for item in matched_results:
         title = item.get("matched_sheet_title")
         rev_total = item.get("revenueVN", 0)
@@ -135,7 +134,7 @@ def run():
                 "revenueVN": rev_total,
                 "revenueTodayVN": rev_today
             }
-            post_res = requests.post(WEB_APP_URL, data=json.dumps(payload))
+            post_res = requests.post(WEB_APP_URL.strip(), data=json.dumps(payload))
             print(f"  💾 Cập nhật '{title}': {rev_total:,} VNĐ -> {post_res.text}")
 
 if __name__ == "__main__":
