@@ -1,131 +1,117 @@
 import json
 import requests
+import urllib.parse
 from playwright.sync_api import sync_playwright
 
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycby2csvwi9GJJ5L3fCNa9O4DqZxG50R-jk8o5c6uV7ltmZpM10Hbdd4paG3G4PoiQm39/exec"
 
 def run():
-    # 1. Lấy danh sách ID từ Google Sheets
+    # 1. Lấy danh sách tên phim từ Google Sheets (?action=get_showtime_ids hoặc endpoint phim)
     try:
         get_url = f"{WEB_APP_URL}?action=get_showtime_ids"
         res = requests.get(get_url)
-        showtime_ids = res.json().get("showtimeIds", [])
-        print(f"📋 Danh sách Showtime IDs cần cào: {showtime_ids}")
+        movies_data = res.json().get("movies", []) or res.json().get("showtimeIds", [])
+        print(f"📋 Danh sách phim cần cào doanh thu BOVN: {movies_data}")
     except Exception as e:
-        print(f"❌ Lỗi lấy danh sách ID từ Sheets: {e}")
+        print(f"❌ Lỗi lấy danh sách từ Sheets: {e}")
         return
 
-    if not showtime_ids:
-        print("ℹ️ Không có ID nào cần cào.")
+    if not movies_data:
+        print("ℹ️ Không có tên phim nào cần cào.")
         return
 
     with sync_playwright() as p:
-        # Giả lập trình duyệt Chrome thật
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={'width': 1280, 'height': 800}
         )
 
-        for showtime_id in showtime_ids:
-            print(f"\n🔍 Đang xử lý Showtime ID: {showtime_id}")
+        for item in movies_data:
+            movie_title = str(item).strip() if isinstance(item, str) else str(item.get("title", "")).strip()
+            if not movie_title:
+                continue
+
+            print(f"\n🔍 Đang tìm trên Box Office VN: {movie_title}")
             page = context.new_page()
-            
-            # Biến hứng dữ liệu JSON ghế
-            seat_data_res = {"seats": []}
 
-            # LẮNG NGHE MỌI RESPONSE CỦA BẤT KỲ API NÀO TRẢ VỀ DẠNG JSON
-            def intercept_response(response):
-                try:
-                    if "application/json" in response.headers.get("content-type", ""):
-                        res_json = response.json()
-                        # Tìm mảng chứa thông tin ghế trong JSON
-                        if isinstance(res_json, dict):
-                            data = res_json.get("data") or res_json.get("seats") or res_json.get("items")
-                            if isinstance(data, list) and len(data) > 0:
-                                # Kiểm tra xem mảng này có phải là danh sách ghế không
-                                if "status" in data[0] or "type" in data[0] or "price" in data[0]:
-                                    seat_data_res["seats"] = data
-                                    print(f"  🎯 Bắt được JSON sơ đồ ghế từ API: {response.url}")
-                except Exception:
-                    pass
+            search_query = urllib.parse.quote(movie_title)
+            search_url = f"https://boxofficevietnam.com/?s={search_query}"
 
-            page.on("response", intercept_response)
-
-            booking_url = f"https://moveek.com/mua-ve/{showtime_id}/seats"
-            
             try:
-                page.goto(booking_url, wait_until="domcontentloaded", timeout=40000)
+                page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(2000)
 
-                # NÚT 1: Bấm "Tôi đã hiểu / Đồng ý" (Nếu có)
-                try:
-                    for btn_text in ["Tôi đã hiểu", "Đồng ý", "Tiếp tục"]:
-                        btn = page.query_selector(f"button:has-text('{btn_text}')")
-                        if btn and btn.is_visible():
-                            btn.click()
-                            page.wait_for_timeout(1000)
-                except Exception:
-                    pass
+                # Chọn kết quả phim đầu tiên
+                first_result = page.query_selector("article a, .post-title a, h2.entry-title a")
+                if first_result:
+                    detail_url = first_result.get_attribute("href")
+                    print(f"  🌐 Vào trang chi tiết: {detail_url}")
+                    page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
+                    page.wait_for_timeout(2000)
 
-                # NÚT 2: Nếu bị kẹt ở bước Chọn Số Lượng Vé -> Bấm cộng 1 vé & Bấm "Chọn ghế" / "Tiếp tục"
-                try:
-                    plus_btn = page.query_selector(".btn-plus, button:has-text('+'), [data-type='plus']")
-                    if plus_btn and plus_btn.is_visible():
-                        plus_btn.click()
-                        page.wait_for_timeout(500)
-                        
-                        continue_btn = page.query_selector("button:has-text('Chọn ghế'), button:has-text('Tiếp tục')")
-                        if continue_btn and continue_btn.is_visible():
-                            continue_btn.click()
-                            page.wait_for_timeout(2000)
-                except Exception:
-                    pass
+                    # TÁCH LẤY DOANH THU TỔNG VÀ DOANH THU TRONG NGÀY TỪ DOM
+                    revenue_data = page.evaluate("""
+                        () => {
+                            let total = 0;
+                            let today = 0;
+                            
+                            // Bắt các khối hiển thị số tiền trên BOVN
+                            const elements = document.querySelectorAll('.revenue-box, .stat-item, .revenue-value, .elementor-counter-number-wrapper');
+                            
+                            elements.forEach(el => {
+                                const text = el.innerText || "";
+                                const parentText = el.parentElement ? el.parentElement.innerText : "";
+                                
+                                // Bốc số nguyên từ chuỗi
+                                const digits = text.replace(/[^0-9]/g, '');
+                                const num = parseInt(digits, 10) || 0;
 
-                # Đợi 3s cho dữ liệu đổ về
-                page.wait_for_timeout(3000)
+                                if (parentText.includes("Trong ngày") || parentText.includes("Hôm nay")) {
+                                    today = num;
+                                } else if (parentText.includes("Tổng") || parentText.includes("Doanh thu")) {
+                                    if (num > total) total = num;
+                                }
+                            });
 
-                seats = seat_data_res["seats"]
-                total_seats = 0
-                booked_seats = 0
+                            // Fallback nếu không gom được theo class: Lấy tất cả các số tiền ₫ trên trang
+                            if (total === 0) {
+                                const allText = document.body.innerText;
+                                const matches = allText.match(/([0-9\\.,]+)\\s*₫/g) || [];
+                                const nums = matches.map(m => parseInt(m.replace(/[^0-9]/g, ''), 10) || 0);
+                                if (nums.length > 0) {
+                                    total = Math.max(...nums);
+                                    today = nums.length > 1 ? Math.min(...nums) : 0;
+                                }
+                            }
 
-                # Nếu bắt được JSON API
-                if seats:
-                    for seat in seats:
-                        s_type = str(seat.get("type", "")).lower()
-                        s_status = str(seat.get("status", "")).lower()
-                        
-                        if s_type != "empty" and s_status != "blocked":
-                            total_seats += 1
-                            if s_status in ["booked", "1", "taken", "occupied"] or seat.get("taken") is True:
-                                booked_seats += 1
+                            return { totalRevenue: total, todayRevenue: today };
+                        }
+                    """)
 
-                # Nếu vẫn không thấy API, đếm số lượng class phần tử sơ đồ ghế trên trang
+                    total_rev = revenue_data.get("totalRevenue", 0)
+                    today_rev = revenue_data.get("todayRevenue", 0)
+
+                    print(f"  🎉 Doanh thu Tổng: {total_rev:,} VNĐ")
+                    print(f"  🔥 Doanh thu Hôm nay: {today_rev:,} VNĐ")
+
+                    # Gửi kết quả về Google Sheets qua doPost
+                    if total_rev > 0:
+                        payload = {
+                            "title": movie_title,
+                            "revenueVN": total_rev,
+                            "revenueTodayVN": today_rev
+                        }
+                        post_res = requests.post(WEB_APP_URL, data=json.dumps(payload))
+                        print(f"  💾 Google Sheets Update: {post_res.text}")
+                    else:
+                        print("  ⚠️ Không bốc được số liệu doanh thu.")
+
                 else:
-                    seat_nodes = page.query_selector_all("div[class*='seat'], span[class*='seat'], svg [class*='seat']")
-                    for node in seat_nodes:
-                        c_name = node.get_attribute("class") or ""
-                        if "empty" not in c_name and "blocked" not in c_name and "legend" not in c_name:
-                            total_seats += 1
-                            if "booked" in c_name or "taken" in c_name or "sold" in c_name or "active" in c_name:
-                                booked_seats += 1
-
-                print(f"  🎉 Kết quả cào thực tế: Đã bán {booked_seats}/{total_seats} vé.")
-
-                # 3. Gửi số vé về Google Sheets qua doPost
-                if total_seats > 0:
-                    payload = {
-                        "showtimeId": showtime_id,
-                        "totalSeats": total_seats,
-                        "bookedSeats": booked_seats
-                    }
-                    post_res = requests.post(WEB_APP_URL, data=json.dumps(payload))
-                    print(f"  💾 Google Sheets Update: {post_res.text}")
-                else:
-                    print("  ⚠️ Không bắt được số ghế. Kiểm tra xem Suất chiếu có bị hủy/hết giờ không.")
+                    print("  ⚠️ Không tìm thấy phim này trên BOVN.")
 
             except Exception as e:
-                print(f"  ❌ Lỗi xử lý ID {showtime_id}: {e}")
+                print(f"  ❌ Lỗi xử lý phim {movie_title}: {e}")
             finally:
                 page.close()
 
