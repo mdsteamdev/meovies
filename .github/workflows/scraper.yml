@@ -25,6 +25,8 @@ jobs:
           pip install requests playwright
           playwright install chromium
           playwright install-deps
-
-      - name: Run Scraper
+          
+     - name: Run Scraper
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
